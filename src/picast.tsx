@@ -14,6 +14,7 @@ import {
 export default function ChatInterface() {
   const [conversations, setConversations] = useState<StoredChatConversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [viewConversationId, setViewConversationId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [searchText, setSearchText] = useState("");
   const [isInitializing, setIsInitializing] = useState(true);
@@ -22,7 +23,9 @@ export default function ChatInterface() {
     async function init() {
       const saved = await loadConversations();
       setConversations(saved);
-      setActiveConversationId(saved[0]?.id ?? null);
+      const firstConversationId = saved[0]?.id ?? null;
+      setActiveConversationId(firstConversationId);
+      setViewConversationId(firstConversationId);
       setIsInitializing(false);
     }
 
@@ -42,9 +45,13 @@ export default function ChatInterface() {
   const chatList = conversations;
   const hasDraft = searchText.trim().length > 0;
 
-  function createConversation() {
+  function createConversation(force = false) {
+    if (!force && !searchText.trim()) return;
+
     const conversation = createNewConversation();
     setConversations((current) => [conversation, ...current]);
+    setActiveConversationId(conversation.id);
+    setViewConversationId(conversation.id);
     return conversation.id;
   }
 
@@ -142,7 +149,12 @@ export default function ChatInterface() {
     showToast({ style: Toast.Style.Success, title: "Copied to clipboard" });
   }
 
-  const detailMarkdown = activeConversation ? formatConversationMarkdown(activeConversation.messages) : null;
+  const viewedConversation = useMemo(
+    () => conversations.find((conversation) => conversation.id === viewConversationId) ?? null,
+    [conversations, viewConversationId],
+  );
+
+  const detailMarkdown = viewedConversation ? formatConversationMarkdown(viewedConversation.messages) : null;
 
   return (
     <List
@@ -151,13 +163,14 @@ export default function ChatInterface() {
       isShowingDetail={true}
       searchText={searchText}
       onSearchTextChange={setSearchText}
-      selectedItemId={activeConversationId ?? undefined}
+      selectedItemId={viewConversationId ?? undefined}
+      onSelectionChange={(id) => setViewConversationId(id)}
       navigationTitle="PI Chat"
       searchBarPlaceholder="Type a message and press Enter..."
       actions={
         <ActionPanel>
           <ActionPanel.Section title="Chats">
-            <Action title="New" icon={Icon.Plus} onAction={createConversation} />
+            <Action title="New" icon={Icon.Plus} onAction={() => createConversation(true)} />
           </ActionPanel.Section>
           <ActionPanel.Section title="Send">
             {hasDraft && activeConversation && (
@@ -181,6 +194,7 @@ export default function ChatInterface() {
         chatList.map((conversation) => {
           const preview = conversation.messages.find((message) => message.role === "user")?.content ?? "New Chat";
           const active = conversation.id === activeConversationId;
+          const viewed = conversation.id === viewConversationId;
           const lastMessage = conversation.messages.at(-1);
           return (
             <List.Item
@@ -192,8 +206,9 @@ export default function ChatInterface() {
                 { date: new Date(conversation.updatedAt), tooltip: new Date(conversation.updatedAt).toLocaleString() },
                 ...(lastMessage?.error ? [{ text: "Error", icon: Icon.Exclamationmark2 }] : []),
                 ...(active ? [{ text: "Active", icon: Icon.Dot }] : []),
+                ...(viewed && !active ? [{ text: "View", icon: Icon.Eye }] : []),
               ]}
-              icon={{ source: Icon.SpeechBubble, tintColor: active ? Color.Green : Color.Purple }}
+              icon={{ source: Icon.SpeechBubble, tintColor: active ? Color.Green : viewed ? Color.Blue : Color.Purple }}
               detail={
                 <List.Item.Detail
                   markdown={
@@ -211,7 +226,7 @@ export default function ChatInterface() {
                         onAction={() => void sendMessage(searchText, conversation.id)}
                       />
                     )}
-                    <Action title="+ New" icon={Icon.Plus} onAction={createConversation} />
+                    <Action title="+ New" icon={Icon.Plus} onAction={() => createConversation(true)} />
                   </ActionPanel.Section>
                   <ActionPanel.Section>
                     <Action
