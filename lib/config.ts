@@ -6,13 +6,9 @@ import path from "path";
  * PI Configuration interface
  */
 export interface PIConfig {
-  host?: string; // Kept for backwards compatibility, not used in CLI mode
-  port?: number; // Kept for backwards compatibility, not used in CLI mode
   apiKey?: string;
   models?: string[];
   defaultModel?: string;
-  endpoint?: string; // Not used in CLI mode
-  useCLI?: boolean; // Whether to use pi CLI (default: true)
 }
 
 /**
@@ -29,8 +25,7 @@ const CONFIG_PATHS = [
  * Default configuration values
  */
 const DEFAULT_CONFIG: PIConfig = {
-  useCLI: false,
-  defaultModel: "auto", // Will use pi's default from settings.json
+  defaultModel: "auto",
 };
 
 /**
@@ -57,12 +52,8 @@ function loadConfigFromFile(configPath: string): PIConfig | null {
  */
 function loadConfigFromEnv(): PIConfig {
   return {
-    useCLI: process.env.PI_USE_CLI !== "false",
-    host: process.env.PI_HOST,
-    port: process.env.PI_PORT ? parseInt(process.env.PI_PORT, 10) : undefined,
     apiKey: process.env.PI_API_KEY,
-    endpoint: process.env.PI_ENDPOINT,
-    defaultModel: process.env.PI_DEFAULT_MODEL || "pi",
+    defaultModel: process.env.PI_DEFAULT_MODEL || "auto",
   };
 }
 
@@ -146,19 +137,6 @@ export function mergeConfig(
  * Validate configuration
  */
 export function validateConfig(config: PIConfig): { valid: boolean; error?: string } {
-  // If using CLI mode, no host/port needed
-  if (config.useCLI !== false) {
-    return { valid: true };
-  }
-
-  // If using HTTP mode, validate host/port
-  if (!config.host) {
-    return { valid: false, error: "Host is required for HTTP mode" };
-  }
-
-  if (!config.port || config.port < 1 || config.port > 65535) {
-    return { valid: false, error: "Invalid port number" };
-  }
-
+  // Config is always valid - we use pi's auth.json for credentials
   return { valid: true };
 }

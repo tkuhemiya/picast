@@ -50,63 +50,70 @@ function readSettings(): Record<string, any> {
 }
 
 /**
- * Get credentials for a provider from auth storage
+ * Get API key for a provider from auth storage
  */
-function getProviderCredentials(providerId: string, authStorage: Record<string, any>): any {
-  return authStorage[providerId];
+function getApiKeyForProvider(authStorage: Record<string, any>, provider: string): string | undefined {
+  const credentials = authStorage[provider];
+  if (!credentials) return undefined;
+  
+  if (credentials.type === "api_key" && credentials.key) {
+    return credentials.key;
+  }
+  
+  // For OAuth providers, use the access token as the API key
+  if (credentials.type === "oauth" && credentials.access) {
+    return credentials.access;
+  }
+  
+  return undefined;
 }
 
 /**
- * Create a model instance using pi-ai with credentials from pi's auth.json
+ * Convert pi-ai AssistantMessage to our ChatResponse format
  */
-function createModel(config: PIConfig, authStorage: Record<string, any>): Model<any> {
-  // Determine provider/model from config
-  const modelId = config.defaultModel || "auto";
+function convertResponse(message: AssistantMessage): ChatResponse {
+  // Extract text content from the message
+  const textContent = message.content
+    .filter(c => c.type === "text")
+    .map(c => (c as any).text)
+    .join("");
   
-  // Parse provider/model from modelId (format: "provider/model" or just model name)
+  return {
+    id: message.responseId,
+    model: message.model,
+    choices: [{
+      message: {
+        role: "assistant",
+        content: textContent,
+      },
+      finish_reason: message.stopReason,
+    }],
+    usage: {
+      prompt_tokens: message.usage.input,
+      completion_tokens: message.usage.output,
+      total_tokens: message.usage.totalTokens,
+    },
+  };
+}
+
+/**
+ * Get or create model from provider/model string
+ */
+function getModelFromString(modelString: string): Model<any> {
   let provider: string;
   let model: string;
   
-  if (modelId.includes("/")) {
-    const parts = modelId.split("/");
+  if (modelString.includes("/")) {
+    const parts = modelString.split("/");
     provider = parts[0];
     model = parts[1];
-  } else if (modelId === "auto") {
-    // Use pi's default provider/model from settings
-    const settings = readSettings();
-    const defaultProvider = settings.defaultProvider || "opencode-go";
-    const defaultModel = settings.defaultModel || "qwen3.5-plus";
-    provider = defaultProvider;
-    model = defaultModel;
   } else {
     // Default to opencode-go if no provider specified
     provider = "opencode-go";
-    model = modelId;
+    model = modelString;
   }
   
-  // Get credentials for this provider
-  const credentials = getProviderCredentials(provider, authStorage);
-  
-  // Build model options based on credential type
-  let modelOptions: any = {};
-  
-  if (credentials) {
-    if (credentials.type === "oauth") {
-      // OAuth credentials (GitHub Copilot, OpenAI Codex, etc.)
-      modelOptions = {
-        accessToken: credentials.access,
-        refreshToken: credentials.refresh,
-      };
-    } else if (credentials.type === "api_key") {
-      // API key credentials
-      modelOptions = {
-        apiKey: credentials.key,
-      };
-    }
-  }
-  
-  // Create and return the model
-  return getModel(provider, model, modelOptions);
+  return getModel(provider as any, model as any);
 }
 
 /**
@@ -150,34 +157,6 @@ export interface ChatResponse {
 }
 
 /**
- * Convert pi-ai AssistantMessage to our ChatResponse format
- */
-function convertResponse(message: AssistantMessage): ChatResponse {
-  // Extract text content from the message
-  const textContent = message.content
-    .filter(c => c.type === "text")
-    .map(c => (c as any).text)
-    .join("");
-  
-  return {
-    id: message.responseId,
-    model: message.model,
-    choices: [{
-      message: {
-        role: "assistant",
-        content: textContent,
-      },
-      finish_reason: message.stopReason,
-    }],
-    usage: {
-      prompt_tokens: message.usage.input,
-      completion_tokens: message.usage.output,
-      total_tokens: message.usage.totalTokens,
-    },
-  };
-}
-
-/**
  * PI API Client using @mariozechner/pi-ai
  */
 export class PIClient {
@@ -214,16 +193,31 @@ export class PIClient {
     const context = this.buildContext(request);
     
     // Determine model to use
-    const modelId = request.model && request.model !== "auto" ? request.model : undefined;
-    const configWithModel = modelId ? { ...this.config, defaultModel: modelId } : this.config;
+    let modelId = request.model && request.model !== "auto" ? request.model : 
+                  this.config.defaultModel || 
+                  this.settings.defaultModel;
     
-    // Create model instance with credentials
-    const model = createModel(configWithModel, this.authStorage);
+    // If still no model, use pi's default provider/model
+    if (!modelId || modelId === "auto") {
+      const provider = this.settings.defaultProvider || "opencode-go";
+      const model = this.settings.defaultModel || "qwen3.5-plus";
+      modelId = `${provider}/${model}`;
+    }
+    
+    // Parse provider from model ID
+    const provider = modelId.includes("/") ? modelId.split("/")[0] : "opencode-go";
+    
+    // Get API key from auth.json
+    const apiKey = getApiKeyForProvider(this.authStorage, provider);
+    
+    // Create model instance
+    const model = getModelFromString(modelId);
     
     try {
       const message = await completeSimple(model, context, {
         temperature: request.temperature,
         maxTokens: request.max_tokens,
+        apiKey,
       });
       
       return convertResponse(message);
@@ -242,15 +236,30 @@ export class PIClient {
     const context = this.buildContext(request);
     
     // Determine model to use
-    const modelId = request.model && request.model !== "auto" ? request.model : undefined;
-    const configWithModel = modelId ? { ...this.config, defaultModel: modelId } : this.config;
+    let modelId = request.model && request.model !== "auto" ? request.model : 
+                  this.config.defaultModel || 
+                  this.settings.defaultModel;
     
-    // Create model instance with credentials
-    const model = createModel(configWithModel, this.authStorage);
+    // If still no model, use pi's default provider/model
+    if (!modelId || modelId === "auto") {
+      const provider = this.settings.defaultProvider || "opencode-go";
+      const model = this.settings.defaultModel || "qwen3.5-plus";
+      modelId = `${provider}/${model}`;
+    }
+    
+    // Parse provider from model ID
+    const provider = modelId.includes("/") ? modelId.split("/")[0] : "opencode-go";
+    
+    // Get API key from auth.json
+    const apiKey = getApiKeyForProvider(this.authStorage, provider);
+    
+    // Create model instance
+    const model = getModelFromString(modelId);
     
     try {
       const stream = streamSimple(model, context, {
         temperature: request.temperature,
+        apiKey,
       });
       
       // Process stream events
