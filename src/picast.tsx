@@ -74,6 +74,12 @@ export default function ChatInterface() {
     try {
       const piClient = createPIClient(config);
       
+      // Test connection first
+      const connectionTest = await piClient.testConnection();
+      if (!connectionTest.success) {
+        throw new Error(connectionTest.error || "Connection failed");
+      }
+      
       // Prepare conversation history (limit to context window)
       const contextWindow = 10; // Could be from preferences
       const conversationHistory = messages
@@ -116,6 +122,9 @@ export default function ChatInterface() {
         title: "Failed to get response",
         message: error instanceof Error ? error.message : "Unknown error",
       });
+      
+      // Remove the user message if failed
+      setMessages((prev) => prev.slice(0, -1));
     } finally {
       setIsLoading(false);
     }
@@ -227,7 +236,7 @@ export default function ChatInterface() {
         <List.EmptyView
           icon={Icon.Robot}
           title="Start a Conversation"
-          description="Ask PI anything. Type your message above and press Ctrl+Enter."
+          description="Uses your existing pi CLI setup. Type a message and press Ctrl+Enter."
           actions={
             <ActionPanel>
               <Action

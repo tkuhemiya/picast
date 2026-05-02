@@ -29,8 +29,8 @@ const CONFIG_PATHS = [
  * Default configuration values
  */
 const DEFAULT_CONFIG: PIConfig = {
-  useCLI: true,
-  defaultModel: "pi",
+  useCLI: false,
+  defaultModel: "auto", // Will use pi's default from settings.json
 };
 
 /**

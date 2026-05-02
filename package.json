@@ -19,6 +19,7 @@
     }
   ],
   "dependencies": {
+    "@mariozechner/pi-ai": "^0.72.0",
     "@raycast/api": "^1.104.15",
     "@raycast/utils": "^1.17.0"
   },
