@@ -14,7 +14,13 @@
     {
       "name": "picast",
       "title": "picast",
-      "description": "",
+      "description": "Chat with PI Agent",
+      "mode": "view"
+    },
+    {
+      "name": "sessions",
+      "title": "Browse Sessions",
+      "description": "Browse and manage chat sessions",
       "mode": "view"
     }
   ],
