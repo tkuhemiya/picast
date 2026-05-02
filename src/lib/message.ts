@@ -2,24 +2,29 @@ import { LocalStorage } from "@raycast/api";
 
 const MESSAGES_KEY = "picast-messages";
 
-export interface ChatMessage {
+export interface StoredChatMessage {
+  id: string;
   role: "user" | "assistant";
   content: string;
   timestamp: number;
   model?: string;
 }
 
-export async function loadMessages(): Promise<ChatMessage[]> {
-  const raw = await LocalStorage.getItem<string>(MESSAGES_KEY);
-  if (!raw) return [];
+function loadJsonFile<T>(raw: string | null, fallback: T): T {
+  if (!raw) return fallback;
   try {
-    return JSON.parse(raw);
+    return JSON.parse(raw) as T;
   } catch {
-    return [];
+    return fallback;
   }
 }
 
-export async function saveMessages(messages: ChatMessage[]) {
+export async function loadMessages(): Promise<StoredChatMessage[]> {
+  const raw = await LocalStorage.getItem<string>(MESSAGES_KEY);
+  return loadJsonFile(raw, []);
+}
+
+export async function saveMessages(messages: StoredChatMessage[]) {
   await LocalStorage.setItem(MESSAGES_KEY, JSON.stringify(messages));
 }
 

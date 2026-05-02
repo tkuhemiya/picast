@@ -1,35 +1,14 @@
 import { useEffect, useState } from "react";
-import {
-  Action,
-  ActionPanel,
-  Alert,
-  Color,
-  Form,
-  Icon,
-  List,
-  confirmAlert,
-  showToast,
-  Toast,
-  Clipboard,
-  useNavigation,
-} from "@raycast/api";
-import {
-  ChatMessage,
-  clearMessages,
-  loadMessages,
-  saveMessages,
-  chat,
-} from "./lib";
+import { Action, ActionPanel, Color, Icon, List, showToast, Toast, Clipboard } from "@raycast/api";
+import { StoredChatMessage, loadMessages, saveMessages, chat } from "./lib";
 
 export default function ChatInterface() {
-  const { push, pop } = useNavigation();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<StoredChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [searchText, setSearchText] = useState("");
   const [isInitializing, setIsInitializing] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  // Load messages on mount
   useEffect(() => {
     async function init() {
       const saved = await loadMessages();
@@ -42,28 +21,11 @@ export default function ChatInterface() {
     init();
   }, []);
 
-  // Persist whenever messages change
   useEffect(() => {
     if (messages.length > 0) {
       saveMessages(messages);
     }
   }, [messages]);
-
-  async function handleDeleteConversation() {
-    const confirmed = await confirmAlert({
-      title: "Delete Conversation",
-      message: "This will permanently delete all messages. Are you sure?",
-      icon: Icon.Trash,
-      primaryAction: { title: "Delete", style: Alert.ActionStyle.Destructive },
-    });
-
-    if (confirmed) {
-      setMessages([]);
-      setSelectedId(null);
-      await clearMessages();
-      await showToast({ style: Toast.Style.Success, title: "Conversation deleted" });
-    }
-  }
 
   async function sendMessage(prompt: string) {
     if (!prompt.trim()) return;
@@ -71,7 +33,8 @@ export default function ChatInterface() {
     setIsLoading(true);
     setSearchText("");
 
-    const userMessage: ChatMessage = {
+    const userMessage: StoredChatMessage = {
+      id: createMessageId(),
       role: "user",
       content: prompt,
       timestamp: Date.now(),
@@ -79,23 +42,36 @@ export default function ChatInterface() {
 
     const newMessages = [...messages, userMessage];
     setMessages(newMessages);
+    console.log("[picast] sending message", {
+      promptLength: prompt.length,
+      messageCount: newMessages.length,
+    });
 
     try {
-      const conversationHistory = newMessages.slice(-20).map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
+      const conversationHistory = [
+        {
+          role: "system" as const,
+          content:
+            "You are PI, a concise and helpful assistant inside a Raycast extension. Answer clearly and directly.",
+        },
+        ...newMessages.slice(-20).map((m) => ({
+          role: m.role,
+          content: m.content,
+        })),
+      ];
 
+      console.log("[picast] conversation history", conversationHistory);
       const response = await chat({
         messages: conversationHistory,
         temperature: 0.7,
       });
+      console.log("[picast] chat response", response);
 
       const choice = response.choices?.[0];
-      const assistantContent =
-        choice?.message?.content ?? choice?.text ?? "No response received";
+      const assistantContent = choice?.message?.content ?? choice?.text ?? "No response received";
 
-      const assistantMessage: ChatMessage = {
+      const assistantMessage: StoredChatMessage = {
+        id: createMessageId(),
         role: "assistant",
         content: assistantContent,
         timestamp: Date.now(),
@@ -106,12 +82,12 @@ export default function ChatInterface() {
       setMessages(finalMessages);
       await saveMessages(finalMessages);
 
-      // Auto-select the new response
       setSelectedId(String(finalMessages.length - 1));
 
       await showToast({ style: Toast.Style.Success, title: "Response received" });
     } catch (error) {
-      console.error("Chat error:", error);
+      console.error("[picast] Chat error:", error);
+      console.error("[picast] Chat error stack:", error instanceof Error ? error.stack : undefined);
       await showToast({
         style: Toast.Style.Failure,
         title: "Failed to get response",
@@ -139,19 +115,6 @@ export default function ChatInterface() {
     showToast({ style: Toast.Style.Success, title: "Copied to clipboard" });
   }
 
-  function openComposeForm(prefill = "") {
-    push(
-      <ComposeForm
-        prefill={prefill}
-        onSend={async (text) => {
-          await sendMessage(text);
-          pop();
-        }}
-        onCancel={pop}
-      />,
-    );
-  }
-
   const hasSearchText = searchText.trim().length > 0;
 
   return (
@@ -169,54 +132,15 @@ export default function ChatInterface() {
         <ActionPanel>
           <ActionPanel.Section title="Send">
             {hasSearchText && (
-              <Action
-                title="Send Message"
-                icon={Icon.Message}
-                onAction={() => sendMessage(searchText)}
-              />
+              <Action title="Send Message" icon={Icon.Message} onAction={() => sendMessage(searchText)} />
             )}
-            <Action
-              title="Compose Message"
-              icon={Icon.Text}
-              shortcut={{ modifiers: ["cmd"], key: "t" }}
-              onAction={() => openComposeForm(searchText)}
-            />
-          </ActionPanel.Section>
-          <ActionPanel.Section title="Chat">
-            <Action
-              title="Regenerate Response"
-              icon={Icon.ArrowClockwise}
-              shortcut={{ modifiers: ["cmd"], key: "r" }}
-              onAction={regenerateLastMessage}
-            />
-            <Action
-              title="Copy Full Conversation"
-              icon={Icon.Clipboard}
-              shortcut={{ modifiers: ["cmd", "shift"], key: "c" }}
-              onAction={() => {
-                const fullText = messages
-                  .map((m) => `**${m.role === "user" ? "You" : "PI"}**: ${m.content}`)
-                  .join("\n\n");
-                Clipboard.copy(fullText);
-                showToast({ style: Toast.Style.Success, title: "Conversation copied" });
-              }}
-            />
-          </ActionPanel.Section>
-          <ActionPanel.Section title="Session">
-            <Action
-              title="Delete Conversation"
-              icon={Icon.Trash}
-              shortcut={{ modifiers: ["cmd", "shift"], key: "delete" }}
-              style={Action.Style.Destructive}
-              onAction={handleDeleteConversation}
-            />
           </ActionPanel.Section>
         </ActionPanel>
       }
     >
-      {/* When typing, show Send action FIRST so Enter hits it immediately */}
       {hasSearchText && (
         <List.Item
+          key="__send__"
           id="__send__"
           title={`↵  Send: "${searchText.slice(0, 60)}${searchText.length > 60 ? "..." : ""}"`}
           icon={{ source: Icon.Message, tintColor: Color.Green }}
@@ -224,23 +148,12 @@ export default function ChatInterface() {
           detail={<List.Item.Detail markdown={`Send message:\n\n${searchText}`} />}
           actions={
             <ActionPanel>
-              <Action
-                title="Send Message"
-                icon={Icon.Message}
-                onAction={() => sendMessage(searchText)}
-              />
-              <Action
-                title="Compose in Editor"
-                icon={Icon.Text}
-                shortcut={{ modifiers: ["cmd"], key: "t" }}
-                onAction={() => openComposeForm(searchText)}
-              />
+              <Action title="Send Message" icon={Icon.Message} onAction={() => sendMessage(searchText)} />
             </ActionPanel>
           }
         />
       )}
 
-      {/* Messages — newest first so recent messages are near the search bar */}
       {messages.length === 0 && !isLoading && !hasSearchText ? (
         <List.EmptyView
           icon={Icon.SpeechBubble}
@@ -251,17 +164,13 @@ export default function ChatInterface() {
         [...messages].reverse().map((message, revIndex) => {
           const originalIndex = messages.length - 1 - revIndex;
           const isAssistant = message.role === "assistant";
-          const icon = isAssistant
-            ? { source: Icon.SpeechBubble, tintColor: Color.Purple }
-            : Icon.Person;
+          const icon = isAssistant ? { source: Icon.SpeechBubble, tintColor: Color.Purple } : Icon.Person;
           const title = isAssistant ? "PI" : "You";
-          const preview =
-            message.content.length > 80
-              ? message.content.slice(0, 80) + "..."
-              : message.content;
+          const preview = message.content.length > 80 ? message.content.slice(0, 80) + "..." : message.content;
 
           return (
             <List.Item
+              key={String(originalIndex)}
               id={String(originalIndex)}
               icon={icon}
               title={title}
@@ -313,6 +222,17 @@ export default function ChatInterface() {
                       }}
                     />
                   </ActionPanel.Section>
+                  <ActionPanel.Section>
+                    <Action
+                      icon={Icon.Trash}
+                      title="Delete All Messages"
+                      style={Action.Style.Destructive}
+                      onAction={() => {
+                        setMessages([]);
+                        saveMessages([]);
+                      }}
+                    />
+                  </ActionPanel.Section>
                 </ActionPanel>
               }
             />
@@ -323,46 +243,13 @@ export default function ChatInterface() {
   );
 }
 
-function ComposeForm({
-  prefill,
-  onSend,
-  onCancel,
-}: {
-  prefill: string;
-  onSend: (text: string) => Promise<void>;
-  onCancel: () => void;
-}) {
-  const [text, setText] = useState(prefill);
-
-  return (
-    <Form
-      actions={
-        <ActionPanel>
-          <Action.SubmitForm
-            title="Send Message"
-            icon={Icon.Message}
-            onSubmit={async () => {
-              if (text.trim()) {
-                await onSend(text.trim());
-              }
-            }}
-          />
-          <Action title="Cancel" icon={Icon.Xmark} onAction={onCancel} />
-        </ActionPanel>
-      }
-    >
-      <Form.TextArea
-        id="message"
-        title="Message"
-        placeholder="Type your message here..."
-        value={text}
-        onChange={setText}
-      />
-    </Form>
-  );
+function createMessageId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function formatMessageForMarkdown(message: ChatMessage): string {
+function formatMessageForMarkdown(message: StoredChatMessage): string {
   if (message.role === "user") {
     return `> **You**\n> \n> ${message.content.replace(/\n/g, "\n> ")}`;
   }
