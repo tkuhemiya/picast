@@ -37,6 +37,8 @@ interface PiSettings {
   defaultThinkingLevel?: string;
 }
 
+const SYSTEM_PROMPT = "You are a concise helpful assistant inside a Raycast extension. Answer clearly and directly.";
+
 interface AuthEntry {
   type: "api_key";
   key: string;
@@ -149,24 +151,36 @@ export interface ChatResponse {
   };
 }
 
+function isUserMessage(message: ChatMessage): message is Extract<ChatMessage, { role: "user" }> {
+  return message.role === "user";
+}
+
+function isAssistantMessage(message: ChatMessage): message is Extract<ChatMessage, { role: "assistant" }> {
+  return message.role === "assistant";
+}
+
 function buildContext(messages: ChatMessage[]): Context {
   const systemMessages = messages.filter((m) => m.role === "system");
-  const otherMessages = messages.filter((m) => m.role !== "system");
-  const timestamp = Date.now();
+  const userMessages = messages.filter(isUserMessage);
+  const assistantMessages = messages.filter(isAssistantMessage);
 
-  const contextMessages: Message[] = otherMessages.map((m) => ({
-    role: m.role,
-    content: [{ type: "text", text: m.content }],
-    timestamp,
-  }));
+  const contextMessages: Message[] = [
+    ...userMessages.map((message) => ({
+      role: "user" as const,
+      content: [{ type: "text" as const, text: message.content }],
+      timestamp: Date.now(),
+    })),
+    ...assistantMessages.map((message) => ({
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: message.content }],
+      timestamp: Date.now(),
+    })),
+  ];
 
-  const context: Context = { messages: contextMessages };
-
-  if (systemMessages.length > 0) {
-    context.systemPrompt = systemMessages.map((m) => m.content).join("\n\n");
-  }
-
-  return context;
+  return {
+    systemPrompt: [SYSTEM_PROMPT, ...systemMessages.map((m) => m.content)].filter(Boolean).join("\n\n"),
+    messages: contextMessages,
+  };
 }
 
 function resolveModel(requestModel?: string): string {

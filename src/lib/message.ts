@@ -1,6 +1,6 @@
 import { LocalStorage } from "@raycast/api";
 
-const MESSAGES_KEY = "picast-messages";
+const CONVERSATIONS_KEY = "picast-conversations";
 
 export interface StoredChatMessage {
   id: string;
@@ -8,6 +8,15 @@ export interface StoredChatMessage {
   content: string;
   timestamp: number;
   model?: string;
+  error?: string;
+}
+
+export interface StoredChatConversation {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  messages: StoredChatMessage[];
 }
 
 function loadJsonFile<T>(raw: string | null, fallback: T): T {
@@ -19,15 +28,38 @@ function loadJsonFile<T>(raw: string | null, fallback: T): T {
   }
 }
 
-export async function loadMessages(): Promise<StoredChatMessage[]> {
-  const raw = await LocalStorage.getItem<string>(MESSAGES_KEY);
-  return loadJsonFile(raw, []);
+export async function loadConversations(): Promise<StoredChatConversation[]> {
+  const raw = await LocalStorage.getItem<string>(CONVERSATIONS_KEY);
+  return loadJsonFile(raw!, []);
 }
 
-export async function saveMessages(messages: StoredChatMessage[]) {
-  await LocalStorage.setItem(MESSAGES_KEY, JSON.stringify(messages));
+export async function saveConversations(conversations: StoredChatConversation[]) {
+  await LocalStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(conversations));
 }
 
-export async function clearMessages() {
-  await LocalStorage.removeItem(MESSAGES_KEY);
+export async function clearConversations() {
+  await LocalStorage.removeItem(CONVERSATIONS_KEY);
+}
+
+export function createId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+export function createNewConversation(title = "New Chat"): StoredChatConversation {
+  const now = Date.now();
+  return {
+    id: createId(),
+    title,
+    createdAt: now,
+    updatedAt: now,
+    messages: [],
+  };
+}
+
+export function updateConversationTitle(conversation: StoredChatConversation): StoredChatConversation {
+  const firstUser = conversation.messages.find((m) => m.role === "user");
+  const title = firstUser?.content.trim().slice(0, 40) || conversation.title || "New Chat";
+  return { ...conversation, title };
 }

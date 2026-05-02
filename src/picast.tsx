@@ -1,113 +1,140 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Action, ActionPanel, Color, Icon, List, showToast, Toast, Clipboard } from "@raycast/api";
-import { StoredChatMessage, loadMessages, saveMessages, chat } from "./lib";
+import {
+  StoredChatConversation,
+  StoredChatMessage,
+  chat,
+  createId,
+  createNewConversation,
+  loadConversations,
+  saveConversations,
+  updateConversationTitle,
+} from "./lib";
 
 export default function ChatInterface() {
-  const [messages, setMessages] = useState<StoredChatMessage[]>([]);
+  const [conversations, setConversations] = useState<StoredChatConversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [searchText, setSearchText] = useState("");
   const [isInitializing, setIsInitializing] = useState(true);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   useEffect(() => {
     async function init() {
-      const saved = await loadMessages();
-      setMessages(saved);
-      if (saved.length > 0) {
-        setSelectedId(String(saved.length - 1));
-      }
+      const saved = await loadConversations();
+      setConversations(saved);
+      setActiveConversationId(saved[0]?.id ?? null);
       setIsInitializing(false);
     }
+
     init();
   }, []);
 
   useEffect(() => {
-    if (messages.length > 0) {
-      saveMessages(messages);
+    if (isInitializing) return;
+    void saveConversations(conversations);
+  }, [conversations, isInitializing]);
+
+  const activeConversation = useMemo(
+    () => conversations.find((conversation) => conversation.id === activeConversationId) ?? null,
+    [conversations, activeConversationId],
+  );
+
+  const chatList = conversations;
+  const hasDraft = searchText.trim().length > 0;
+
+  function createConversation() {
+    const conversation = createNewConversation();
+    setConversations((current) => [conversation, ...current]);
+    return conversation.id;
+  }
+
+  function upsertConversation(updatedConversation: StoredChatConversation) {
+    setConversations((current) => {
+      const exists = current.some((conversation) => conversation.id === updatedConversation.id);
+      return exists
+        ? current.map((conversation) =>
+            conversation.id === updatedConversation.id ? updatedConversation : conversation,
+          )
+        : [updatedConversation, ...current];
+    });
+  }
+
+  async function sendMessage(prompt: string, conversationIdInput?: string) {
+    const trimmed = prompt.trim();
+    if (!trimmed) return;
+
+    const targetConversation =
+      conversations.find((conversation) => conversation.id === conversationIdInput) ?? activeConversation ?? null;
+    const conversation = targetConversation ?? createNewConversation();
+    const now = Date.now();
+
+    if (!targetConversation && !activeConversation) {
+      setConversations((current) => [conversation, ...current]);
     }
-  }, [messages]);
-
-  async function sendMessage(prompt: string) {
-    if (!prompt.trim()) return;
-
-    setIsLoading(true);
-    setSearchText("");
 
     const userMessage: StoredChatMessage = {
-      id: createMessageId(),
+      id: createId(),
       role: "user",
-      content: prompt,
-      timestamp: Date.now(),
+      content: trimmed,
+      timestamp: now,
     };
 
-    const newMessages = [...messages, userMessage];
-    setMessages(newMessages);
-    console.log("[picast] sending message", {
-      promptLength: prompt.length,
-      messageCount: newMessages.length,
+    const conversationWithUser = updateConversationTitle({
+      ...conversation,
+      messages: [...conversation.messages, userMessage],
+      updatedAt: now,
+      title: conversation.messages.length === 0 ? trimmed.slice(0, 40) || "New Chat" : conversation.title,
     });
 
-    try {
-      const conversationHistory = [
-        {
-          role: "system" as const,
-          content:
-            "You are PI, a concise and helpful assistant inside a Raycast extension. Answer clearly and directly.",
-        },
-        ...newMessages.slice(-20).map((m) => ({
-          role: m.role,
-          content: m.content,
-        })),
-      ];
+    setActiveConversationId(conversation.id);
+    upsertConversation(conversationWithUser);
+    setSearchText("");
+    setIsLoading(true);
 
-      console.log("[picast] conversation history", conversationHistory);
+    try {
       const response = await chat({
-        messages: conversationHistory,
-        temperature: 0.7,
+        messages: conversationWithUser.messages.slice(-20).map((message) => ({
+          role: message.role,
+          content: message.content,
+        })),
       });
-      console.log("[picast] chat response", response);
 
       const choice = response.choices?.[0];
       const assistantContent = choice?.message?.content ?? choice?.text ?? "No response received";
-
       const assistantMessage: StoredChatMessage = {
-        id: createMessageId(),
+        id: `${userMessage.id}-assistant`,
         role: "assistant",
         content: assistantContent,
         timestamp: Date.now(),
         model: response.model,
       };
 
-      const finalMessages = [...newMessages, assistantMessage];
-      setMessages(finalMessages);
-      await saveMessages(finalMessages);
-
-      setSelectedId(String(finalMessages.length - 1));
-
+      const nextConversation = updateConversationTitle({
+        ...conversationWithUser,
+        messages: [...conversationWithUser.messages, assistantMessage],
+        updatedAt: assistantMessage.timestamp,
+      });
+      upsertConversation(nextConversation);
       await showToast({ style: Toast.Style.Success, title: "Response received" });
     } catch (error) {
-      console.error("[picast] Chat error:", error);
-      console.error("[picast] Chat error stack:", error instanceof Error ? error.stack : undefined);
-      await showToast({
-        style: Toast.Style.Failure,
-        title: "Failed to get response",
-        message: error instanceof Error ? error.message : "Unknown error",
-      });
-      setMessages(newMessages);
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      const failedMessage: StoredChatMessage = {
+        id: `${userMessage.id}-error`,
+        role: "assistant",
+        content: "Request failed",
+        timestamp: Date.now(),
+        error: errorMessage,
+      };
+      const nextConversation = {
+        ...conversationWithUser,
+        messages: [...conversationWithUser.messages, failedMessage],
+        updatedAt: failedMessage.timestamp,
+      };
+      upsertConversation(nextConversation);
+      await showToast({ style: Toast.Style.Failure, title: "Request failed", message: errorMessage });
     } finally {
       setIsLoading(false);
     }
-  }
-
-  async function regenerateLastMessage() {
-    if (messages.length === 0) return;
-    const lastUserIndex = messages.map((m) => m.role).lastIndexOf("user");
-    if (lastUserIndex === -1) return;
-
-    const lastUserMessage = messages[lastUserIndex];
-    const trimmedMessages = messages.slice(0, lastUserIndex + 1);
-    setMessages(trimmedMessages);
-    await sendMessage(lastUserMessage.content);
   }
 
   function copyMessage(content: string) {
@@ -115,7 +142,7 @@ export default function ChatInterface() {
     showToast({ style: Toast.Style.Success, title: "Copied to clipboard" });
   }
 
-  const hasSearchText = searchText.trim().length > 0;
+  const detailMarkdown = activeConversation ? formatConversationMarkdown(activeConversation.messages) : null;
 
   return (
     <List
@@ -124,112 +151,98 @@ export default function ChatInterface() {
       isShowingDetail={true}
       searchText={searchText}
       onSearchTextChange={setSearchText}
-      selectedItemId={selectedId ?? undefined}
-      onSelectionChange={(id) => setSelectedId(id)}
+      selectedItemId={activeConversationId ?? undefined}
       navigationTitle="PI Chat"
       searchBarPlaceholder="Type a message and press Enter..."
       actions={
         <ActionPanel>
+          <ActionPanel.Section title="Chats">
+            <Action title="New" icon={Icon.Plus} onAction={createConversation} />
+          </ActionPanel.Section>
           <ActionPanel.Section title="Send">
-            {hasSearchText && (
-              <Action title="Send Message" icon={Icon.Message} onAction={() => sendMessage(searchText)} />
+            {hasDraft && activeConversation && (
+              <Action
+                title="Send Message"
+                icon={Icon.Message}
+                onAction={() => void sendMessage(searchText, activeConversation.id)}
+              />
             )}
           </ActionPanel.Section>
         </ActionPanel>
       }
     >
-      {hasSearchText && (
-        <List.Item
-          key="__send__"
-          id="__send__"
-          title={`↵  Send: "${searchText.slice(0, 60)}${searchText.length > 60 ? "..." : ""}"`}
-          icon={{ source: Icon.Message, tintColor: Color.Green }}
-          accessories={[{ text: "Press Enter", icon: Icon.ArrowRight }]}
-          detail={<List.Item.Detail markdown={`Send message:\n\n${searchText}`} />}
-          actions={
-            <ActionPanel>
-              <Action title="Send Message" icon={Icon.Message} onAction={() => sendMessage(searchText)} />
-            </ActionPanel>
-          }
-        />
-      )}
-
-      {messages.length === 0 && !isLoading && !hasSearchText ? (
+      {chatList.length === 0 ? (
         <List.EmptyView
           icon={Icon.SpeechBubble}
           title="Start a Conversation"
-          description="Type below and press Enter to send.\n↑↓ to browse messages."
+          description="Create a new chat to begin."
         />
       ) : (
-        [...messages].reverse().map((message, revIndex) => {
-          const originalIndex = messages.length - 1 - revIndex;
-          const isAssistant = message.role === "assistant";
-          const icon = isAssistant ? { source: Icon.SpeechBubble, tintColor: Color.Purple } : Icon.Person;
-          const title = isAssistant ? "PI" : "You";
-          const preview = message.content.length > 80 ? message.content.slice(0, 80) + "..." : message.content;
-
+        chatList.map((conversation) => {
+          const preview = conversation.messages.find((message) => message.role === "user")?.content ?? "New Chat";
+          const active = conversation.id === activeConversationId;
+          const lastMessage = conversation.messages.at(-1);
           return (
             <List.Item
-              key={String(originalIndex)}
-              id={String(originalIndex)}
-              icon={icon}
-              title={title}
-              subtitle={preview}
+              key={conversation.id}
+              id={conversation.id}
+              title={conversation.title}
+              subtitle={preview.length > 120 ? `${preview.slice(0, 120)}...` : preview}
               accessories={[
-                {
-                  date: new Date(message.timestamp),
-                  tooltip: new Date(message.timestamp).toLocaleString(),
-                },
-                ...(isAssistant && message.model
-                  ? [
-                      {
-                        text: {
-                          value: message.model.split("/").pop() || message.model,
-                          color: Color.Purple,
-                        },
-                      },
-                    ]
-                  : []),
+                { date: new Date(conversation.updatedAt), tooltip: new Date(conversation.updatedAt).toLocaleString() },
+                ...(lastMessage?.error ? [{ text: "Error", icon: Icon.Exclamationmark2 }] : []),
+                ...(active ? [{ text: "Active", icon: Icon.Dot }] : []),
               ]}
-              detail={<List.Item.Detail markdown={formatMessageForMarkdown(message)} />}
+              icon={{ source: Icon.SpeechBubble, tintColor: active ? Color.Green : Color.Purple }}
+              detail={
+                <List.Item.Detail
+                  markdown={
+                    detailMarkdown ?? "# No conversation selected\n\nCreate a new chat or select one from the list."
+                  }
+                />
+              }
               actions={
                 <ActionPanel>
                   <ActionPanel.Section>
-                    <Action
-                      icon={Icon.Clipboard}
-                      title="Copy Message"
-                      shortcut={{ modifiers: ["cmd"], key: "c" }}
-                      onAction={() => copyMessage(message.content)}
-                    />
-                    {isAssistant && (
+                    {hasDraft && (
                       <Action
-                        icon={Icon.ArrowClockwise}
-                        title="Regenerate"
-                        shortcut={{ modifiers: ["cmd"], key: "r" }}
-                        onAction={regenerateLastMessage}
+                        title="Send Message"
+                        icon={Icon.Message}
+                        onAction={() => void sendMessage(searchText, conversation.id)}
                       />
                     )}
+                    <Action title="+ New" icon={Icon.Plus} onAction={createConversation} />
                   </ActionPanel.Section>
                   <ActionPanel.Section>
                     <Action
-                      icon={Icon.Trash}
-                      title="Delete Message"
-                      style={Action.Style.Destructive}
-                      onAction={() => {
-                        const trimmed = messages.filter((_, i) => i !== originalIndex);
-                        setMessages(trimmed);
-                        saveMessages(trimmed);
-                      }}
+                      title="Copy Conversation"
+                      icon={Icon.Clipboard}
+                      shortcut={{ modifiers: ["cmd"], key: "c" }}
+                      onAction={() => copyMessage(formatConversationClipboard(conversation.messages))}
                     />
                   </ActionPanel.Section>
                   <ActionPanel.Section>
                     <Action
+                      title="Delete Chat"
                       icon={Icon.Trash}
-                      title="Delete All Messages"
                       style={Action.Style.Destructive}
                       onAction={() => {
-                        setMessages([]);
-                        saveMessages([]);
+                        const next = conversations.filter((item) => item.id !== conversation.id);
+                        setConversations(next);
+                        void saveConversations(next);
+                        if (activeConversationId === conversation.id) {
+                          setActiveConversationId(null);
+                        }
+                      }}
+                    />
+                    <Action
+                      title="Delete All Messages"
+                      icon={Icon.Trash}
+                      style={Action.Style.Destructive}
+                      onAction={() => {
+                        setConversations([]);
+                        setActiveConversationId(null);
+                        void saveConversations([]);
                       }}
                     />
                   </ActionPanel.Section>
@@ -243,15 +256,16 @@ export default function ChatInterface() {
   );
 }
 
-function createMessageId(): string {
-  return typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+function formatConversationMarkdown(messages: StoredChatMessage[]): string {
+  return messages
+    .map((message) => {
+      const role = message.role === "user" ? "You" : "PI";
+      const error = message.error ? `\n\n⚠️ **Error:** ${message.error}` : "";
+      return `### ${role}\n\n${message.content}${error}`;
+    })
+    .join("\n\n---\n\n");
 }
 
-function formatMessageForMarkdown(message: StoredChatMessage): string {
-  if (message.role === "user") {
-    return `> **You**\n> \n> ${message.content.replace(/\n/g, "\n> ")}`;
-  }
-  return message.content;
+function formatConversationClipboard(messages: StoredChatMessage[]): string {
+  return messages.map((message) => `${message.role === "user" ? "You" : "PI"}: ${message.content}`).join("\n\n");
 }
