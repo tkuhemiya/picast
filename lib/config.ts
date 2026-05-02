@@ -6,12 +6,13 @@ import path from "path";
  * PI Configuration interface
  */
 export interface PIConfig {
-  host: string;
-  port: number;
+  host?: string; // Kept for backwards compatibility, not used in CLI mode
+  port?: number; // Kept for backwards compatibility, not used in CLI mode
   apiKey?: string;
   models?: string[];
   defaultModel?: string;
-  endpoint?: string;
+  endpoint?: string; // Not used in CLI mode
+  useCLI?: boolean; // Whether to use pi CLI (default: true)
 }
 
 /**
@@ -28,9 +29,8 @@ const CONFIG_PATHS = [
  * Default configuration values
  */
 const DEFAULT_CONFIG: PIConfig = {
-  host: "localhost",
-  port: 11434,
-  endpoint: "/api/v1/chat",
+  useCLI: true,
+  defaultModel: "pi",
 };
 
 /**
@@ -57,10 +57,12 @@ function loadConfigFromFile(configPath: string): PIConfig | null {
  */
 function loadConfigFromEnv(): PIConfig {
   return {
-    host: process.env.PI_HOST || DEFAULT_CONFIG.host,
-    port: parseInt(process.env.PI_PORT || "11434", 10),
+    useCLI: process.env.PI_USE_CLI !== "false",
+    host: process.env.PI_HOST,
+    port: process.env.PI_PORT ? parseInt(process.env.PI_PORT, 10) : undefined,
     apiKey: process.env.PI_API_KEY,
-    endpoint: process.env.PI_ENDPOINT || DEFAULT_CONFIG.endpoint,
+    endpoint: process.env.PI_ENDPOINT,
+    defaultModel: process.env.PI_DEFAULT_MODEL || "pi",
   };
 }
 
@@ -144,8 +146,14 @@ export function mergeConfig(
  * Validate configuration
  */
 export function validateConfig(config: PIConfig): { valid: boolean; error?: string } {
+  // If using CLI mode, no host/port needed
+  if (config.useCLI !== false) {
+    return { valid: true };
+  }
+
+  // If using HTTP mode, validate host/port
   if (!config.host) {
-    return { valid: false, error: "Host is required" };
+    return { valid: false, error: "Host is required for HTTP mode" };
   }
 
   if (!config.port || config.port < 1 || config.port > 65535) {

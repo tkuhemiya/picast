@@ -180,9 +180,11 @@ export default function ChatInterface() {
           value={currentModel}
           onChange={setCurrentModel}
         >
-          <List.Dropdown.Item value="auto" title="Auto-detect" />
-          <List.Dropdown.Item value="pi-chat" title="PI Chat" />
-          <List.Dropdown.Item value="pi-code" title="PI Code" />
+          <List.Dropdown.Item value="auto" title="Auto-detect (Default)" />
+          <List.Dropdown.Item value="sonnet" title="Claude Sonnet" />
+          <List.Dropdown.Item value="gpt-4o" title="GPT-4o" />
+          <List.Dropdown.Item value="gemini" title="Gemini" />
+          <List.Dropdown.Item value="deepseek" title="DeepSeek" />
         </List.Dropdown>
       }
       actions={
@@ -225,7 +227,7 @@ export default function ChatInterface() {
         <List.EmptyView
           icon={Icon.Robot}
           title="Start a Conversation"
-          description="Ask PI anything. Type your message above and press Enter."
+          description="Ask PI anything. Type your message above and press Ctrl+Enter."
           actions={
             <ActionPanel>
               <Action
